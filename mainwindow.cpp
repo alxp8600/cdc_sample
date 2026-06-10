@@ -2,37 +2,64 @@
 
 #include "cdc.h"
 
+#include <QApplication>
 #include <QCheckBox>
+#include <QComboBox>
+#include <QDateTime>
+#include <QDir>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMetaObject>
 #include <QPushButton>
+#include <QStandardPaths>
 #include <QTextEdit>
 #include <QVBoxLayout>
+
+MainWindow * MainWindow::instance_ = nullptr;
 
 MainWindow::MainWindow(QWidget * parent)
     : QMainWindow(parent)
 {
+    instance_ = this;
     setWindowTitle("CDC Sample");
     resize(640, 480);
     setupUi();
+
+    // 设置日志路径到应用数据目录
+    const QString dataDir = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation);
+    QDir().mkpath(dataDir);
+    QString logName = QString("cdc_sample_%1_%2.log")
+                          .arg(QDateTime::currentDateTime().toString("yyyyMMdd-hhmmss"),
+                               QString::number(QApplication::applicationPid()));
+    std::string log_path = QString("%1/%2").arg(dataDir, logName).toStdString();
+    CDCSetLogPath(log_path.c_str());
+
+    appendLog(QString("[INFO] Log path: %1").arg(log_path.c_str()));
+
+    CDCCallback cb{};
+    cb.logFunc    = &MainWindow::onLogCallback;
+    cb.camListFunc = &MainWindow::onCamListCallback;
+    cdc_ = CDCCreate(&cb);
+    if (cdc_)
+        appendLog("[INFO] CDCCreate ok");
+    else
+        appendLog("[ERROR] CDCCreate failed");
 }
 
 MainWindow::~MainWindow()
 {
-    if (cdc_)
+    instance_ = nullptr;
+    if (opened_)
     {
         CDCClose(cdc_);
-        CDCDestroy(cdc_);
-        cdc_ = nullptr;
+        opened_ = false;
     }
+    CDCDestroy(cdc_);
+    cdc_ = nullptr;
 }
 
-/*
- * setupUi
- * 构建界面布局: 地址栏 + 连接/断开按钮 + 设备开关 + 日志区
- */
 void MainWindow::setupUi()
 {
     auto * central = new QWidget(this);
@@ -78,6 +105,19 @@ void MainWindow::setupUi()
     devLayout->addStretch();
     mainLayout->addWidget(devGroup);
 
+    // 摄像头枚举
+    auto * camGroup = new QGroupBox("Camera", this);
+    auto * camLayout = new QHBoxLayout(camGroup);
+    cam_combo_ = new QComboBox(this);
+    cam_combo_->setMinimumWidth(200);
+    cam_combo_->setToolTip("Select a camera device");
+    camLayout->addWidget(cam_combo_);
+    cam_enum_btn_ = new QPushButton("Enum", this);
+    cam_enum_btn_->setToolTip("Enumerate camera devices via CDC");
+    camLayout->addWidget(cam_enum_btn_);
+    camLayout->addStretch();
+    mainLayout->addWidget(camGroup);
+
     // 日志区
     log_view_ = new QTextEdit(this);
     log_view_->setReadOnly(true);
@@ -90,13 +130,11 @@ void MainWindow::setupUi()
     connect(spk_btn_, &QPushButton::toggled, this, &MainWindow::onSpkToggle);
     connect(cam_btn_, &QPushButton::toggled, this, &MainWindow::onCamToggle);
     connect(mon_btn_, &QPushButton::toggled, this, &MainWindow::onMonToggle);
+    connect(cam_enum_btn_, &QPushButton::clicked, this, &MainWindow::onCamEnum);
+    connect(cam_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &MainWindow::onCamComboChanged);
 }
 
-/*
- * appendLog
- * 向日志窗口追加一行文本
- * @param text  日志内容
- */
 void MainWindow::appendLog(const QString & text)
 {
     if (log_view_)
@@ -105,61 +143,19 @@ void MainWindow::appendLog(const QString & text)
     }
 }
 
-/*
- * onConnect
- * 创建并打开 CDC 会话
- */
 void MainWindow::onConnect()
 {
-    if (cdc_)
-    {
-        appendLog("[WARN] Already connected");
-        return;
-    }
-
-    const QString url = addr_edit_->text().trimmed();
-    if (url.isEmpty())
-    {
-        appendLog("[ERROR] URL is empty");
-        return;
-    }
-
-    CDCConfig cfg;
-    cfg.connect_timeout_ms = 5000;
-    cfg.retry_count        = 3;
-    cfg.mic_enabled        = mic_btn_->isChecked();
-    cfg.spk_enabled        = spk_btn_->isChecked();
-    cfg.cam_enabled        = cam_btn_->isChecked();
-    cfg.mon_enabled        = mon_btn_->isChecked();
-
-    CDCCallback cb{};
-    cdc_ = CDCCreate(url.toUtf8().constData(), &cfg, nullptr, &cb);
-    if (!cdc_)
-    {
-        appendLog("[ERROR] CDCCreate failed");
-        return;
-    }
-
-    appendLog("[INFO] CDCCreate ok, opening...");
-    CDCOpen(cdc_);
-    appendLog("[INFO] CDCOpen called");
-
-    connect_btn_->setEnabled(false);
-    disconnect_btn_->setEnabled(true);
+    openSession();
 }
 
-/*
- * onDisconnect
- * 关闭并销毁 CDC 会话
- */
 void MainWindow::onDisconnect()
 {
-    if (!cdc_) return;
-
-    CDCClose(cdc_);
-    CDCDestroy(cdc_);
-    cdc_ = nullptr;
-    appendLog("[INFO] CDC closed");
+    if (opened_)
+    {
+        CDCClose(cdc_);
+        opened_ = false;
+        appendLog("[INFO] CDC closed");
+    }
 
     connect_btn_->setEnabled(true);
     disconnect_btn_->setEnabled(false);
@@ -171,36 +167,129 @@ void MainWindow::onDisconnect()
 
 void MainWindow::onMicToggle(bool checked)
 {
-    if (cdc_)
-    {
-        CDCMicState(cdc_, checked);
-        appendLog(QString("[INFO] Mic %1").arg(checked ? "on" : "off"));
-    }
+    CDCMicState(cdc_, checked);
+    appendLog(QString("[INFO] Mic %1").arg(checked ? "on" : "off"));
 }
 
 void MainWindow::onSpkToggle(bool checked)
 {
-    if (cdc_)
-    {
-        CDCSpkState(cdc_, checked);
-        appendLog(QString("[INFO] Spk %1").arg(checked ? "on" : "off"));
-    }
+    CDCSpkState(cdc_, checked);
+    appendLog(QString("[INFO] Spk %1").arg(checked ? "on" : "off"));
 }
 
 void MainWindow::onCamToggle(bool checked)
 {
-    if (cdc_)
-    {
-        CDCCamState(cdc_, checked);
-        appendLog(QString("[INFO] Cam %1").arg(checked ? "on" : "off"));
-    }
+    CDCCamState(cdc_, checked);
+    appendLog(QString("[INFO] Cam %1").arg(checked ? "on" : "off"));
 }
 
 void MainWindow::onMonToggle(bool checked)
 {
-    if (cdc_)
+    CDCMonState(cdc_, checked);
+    appendLog(QString("[INFO] Mon %1").arg(checked ? "on" : "off"));
+}
+
+void MainWindow::onLogCallback(CDCLogLevel level, const char * log)
+{
+    if (!log) return;
+
+    const char * tag = "[?]";
+    switch (level)
     {
-        CDCMonState(cdc_, checked);
-        appendLog(QString("[INFO] Mon %1").arg(checked ? "on" : "off"));
+    case CDC_LOG_DEBUG: tag = "[D]"; break;
+    case CDC_LOG_INFO:  tag = "[I]"; break;
+    case CDC_LOG_WARN:  tag = "[W]"; break;
+    case CDC_LOG_ERROR: tag = "[E]"; break;
     }
+
+    auto * inst = instance();
+    if (inst)
+    {
+        QString text = QString("%1 %2").arg(tag, QString::fromUtf8(log));
+        QMetaObject::invokeMethod(inst, "appendLog", Qt::QueuedConnection,
+                                  Q_ARG(QString, text));
+    }
+}
+
+using CamDeviceVec = QVector<QPair<QString, QString>>;
+
+void MainWindow::onCamListCallback(void * /*handle*/, const CDCCamDevice * devices, int count)
+{
+    CamDeviceVec list;
+    for (int i = 0; i < count; ++i)
+    {
+        list.append({QString::fromUtf8(devices[i].name), QString::fromUtf8(devices[i].id)});
+    }
+
+    auto * inst = instance();
+    if (inst)
+    {
+        QMetaObject::invokeMethod(inst, "onCamListUpdate", Qt::QueuedConnection,
+                                   Q_ARG(CamDeviceVec, list));
+    }
+}
+
+void MainWindow::onCamListUpdate(QVector<QPair<QString, QString>> devices)
+{
+    cam_combo_->clear();
+    for (const auto & d : devices)
+    {
+        cam_combo_->addItem(QString("%1 (%2)").arg(d.first, d.second), d.second);
+    }
+
+    appendLog(QString("[INFO] Camera enum done, %1 device(s) found").arg(devices.size()));
+
+    if (devices.isEmpty())
+    {
+        cam_combo_->addItem("(no camera found)", QString());
+    }
+}
+
+void MainWindow::onCamEnum()
+{
+    appendLog("[INFO] Starting camera enumeration...");
+    cam_combo_->clear();
+    cam_combo_->addItem("(enumerating...)", QString());
+    CDCCamEnumList(cdc_, 1 /* async */);
+}
+
+void MainWindow::onCamComboChanged(int index)
+{
+    if (index < 0) return;
+    const QString id = cam_combo_->currentData().toString();
+    selected_cam_id_ = id.toStdString();
+    if (!selected_cam_id_.empty())
+    {
+        appendLog(QString("[INFO] Camera selected: %1").arg(selected_cam_id_.c_str()));
+    }
+}
+
+void MainWindow::openSession()
+{
+    const QString url = addr_edit_->text().trimmed();
+    if (url.isEmpty())
+    {
+        appendLog("[ERROR] URL is empty");
+        return;
+    }
+
+    CDCConfig cfg{};
+    cfg.url                = url.toUtf8().constData();
+    cfg.wnd.wnd            = nullptr;  // demo: no video render widget
+    cfg.connect_timeout_ms = 5000;
+    cfg.retry_count        = 3;
+    cfg.mic_enabled        = mic_btn_->isChecked();
+    cfg.spk_enabled        = spk_btn_->isChecked();
+    cfg.cam_enabled        = cam_btn_->isChecked();
+    cfg.mon_enabled        = mon_btn_->isChecked();
+    cfg.cam_device_id      = selected_cam_id_.empty() ? nullptr : selected_cam_id_.c_str();
+
+
+
+    CDCOpen(cdc_, &cfg);
+    opened_ = true;
+    appendLog(QString("[INFO] CDCOpen called"));
+
+    connect_btn_->setEnabled(false);
+    disconnect_btn_->setEnabled(true);
 }

@@ -1,0 +1,191 @@
+# =============================================================================
+# CDC SDK - 通用 .gitignore
+#   覆盖: CMake / Visual Studio / Xcode / Android Studio / CLion / VSCode
+#         以及 macOS / Windows / Linux 平台残留文件
+#   原则: 只提交"源" (源码 + CMakeLists.txt + 生成脚本), 不提交"产物"
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# 构建输出目录 (任何位置)
+# -----------------------------------------------------------------------------
+build/
+builds/
+out/
+cmake-build-*/
+[Bb]in/
+[Oo]bj/
+.cache/
+
+# 常见 CMake 构建配置目录
+[Dd]ebug/
+[Rr]elease/
+RelWithDebInfo/
+MinSizeRel/
+x64/
+Win32/
+ARM/
+ARM64/
+
+# -----------------------------------------------------------------------------
+# CMake 生成产物
+# -----------------------------------------------------------------------------
+CMakeCache.txt
+CMakeFiles/
+CMakeScripts/
+cmake_install.cmake
+install_manifest.txt
+CTestTestfile.cmake
+Testing/
+_deps/
+compile_commands.json
+CMakeUserPresets.json
+
+# -----------------------------------------------------------------------------
+# Visual Studio / MSBuild
+# -----------------------------------------------------------------------------
+.vs/
+*.sln
+*.suo
+*.sdf
+*.opensdf
+*.VC.db
+*.VC.opendb
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+*.vcproj
+*.vcproj.user
+*.ilk
+*.exp
+*.idb
+*.iobj
+*.ipdb
+*.tlog
+*.lastbuildstate
+*.unsuccessfulbuild
+*.log
+*.obj
+*.dir/
+ipch/
+.vsconfig
+
+# -----------------------------------------------------------------------------
+# Xcode (macOS / iOS)
+# -----------------------------------------------------------------------------
+*.xcodeproj/
+*.xcworkspace/
+xcuserdata/
+DerivedData/
+*.xcuserstate
+*.moved-aside
+*.xccheckout
+*.xcscmblueprint
+
+# -----------------------------------------------------------------------------
+# Android / Gradle
+# -----------------------------------------------------------------------------
+.gradle/
+local.properties
+*.iml
+.cxx/
+.externalNativeBuild/
+captures/
+
+# -----------------------------------------------------------------------------
+# CLion / IntelliJ / Rider
+# -----------------------------------------------------------------------------
+.idea/
+*.iws
+*.ipr
+
+# -----------------------------------------------------------------------------
+# VS Code (保留必要工作区文件, 忽略机器相关缓存)
+# -----------------------------------------------------------------------------
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+!.vscode/c_cpp_properties.json
+
+# -----------------------------------------------------------------------------
+# 通用编译产物 (Unix / Linux / macOS)
+# -----------------------------------------------------------------------------
+*.o
+*.a
+*.so
+*.so.*
+*.dylib
+*.la
+*.lo
+*.slo
+*.d
+*.gch
+*.pch
+*.swp
+*.swo
+
+# -----------------------------------------------------------------------------
+# 操作系统垃圾文件
+# -----------------------------------------------------------------------------
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+# Linux
+*~
+.fuse_hidden*
+.directory
+.Trash-*
+
+# -----------------------------------------------------------------------------
+# 临时 / 备份
+# -----------------------------------------------------------------------------
+*.bak
+*.tmp
+*.orig
+*.rej
+
+# -----------------------------------------------------------------------------
+# 项目专用: 各平台 projects/<platform>/ 下的 CMake 生成物
+#   只保留 gen_*.bat / gen_*.sh / *.cmake 这类输入脚本
+# -----------------------------------------------------------------------------
+projects/*/cdc.sln
+projects/*/cdc.dir/
+projects/*/ALL_BUILD*
+projects/*/ZERO_CHECK*
+projects/*/INSTALL*
+projects/*/PACKAGE*
+projects/*/*.vcxproj
+projects/*/*.vcxproj.filters
+projects/*/*.vcxproj.user
+projects/*/CMakeFiles/
+projects/*/CMakeCache.txt
+projects/*/cmake_install.cmake
+projects/*/.vs/
+projects/*/x64/
+projects/*/Win32/
+projects/*/ARM64/
+projects/*/Debug/
+projects/*/Release/
+projects/*/DerivedData/
+projects/*/*.xcodeproj/
+projects/*/*.xcworkspace/
+
+# -----------------------------------------------------------------------------
+# 例外白名单: 第三方预编译库与头文件必须提交
+#   注意: ! 规则放在文件末尾, 用来覆盖上方所有忽略规则
+#         (例如 [Dd]ebug/ / [Rr]elease/ / [Bb]in/ / *.a / *.so / *.dylib 等)
+# -----------------------------------------------------------------------------
+!3rd/
+!3rd/**
