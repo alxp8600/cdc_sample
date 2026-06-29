@@ -7,6 +7,7 @@
 
 #include "cdc.h"
 
+class InputCapture;
 class QComboBox;
 class QLineEdit;
 class QPushButton;
@@ -29,6 +30,8 @@ private slots:
     void onSpkToggle(bool checked);
     void onCamToggle(bool checked);
     void onMonToggle(bool checked);
+    void onKbToggle(bool checked);
+    void onMsToggle(bool checked);
     void onCamEnum();
     void onCamListUpdate(QVector<QPair<QString, QString>> devices);
     void onCamComboChanged(int index);
@@ -38,13 +41,15 @@ private:
     void setupUi();
     void openSession();
 
-
     static void onLogCallback(CDCLogLevel level, const char * log);
     static void onCamListCallback(void * handle, const CDCCamDevice * devices, int count);
+
     static MainWindow * instance_;
 
     void * cdc_ = nullptr;
     bool opened_ = false;
+
+    InputCapture * input_capture_ = nullptr;
 
     std::string url_utf8_;       // 持久化 url.toStdString() 供 CDCOpen 使用
     QLineEdit   * addr_edit_ = nullptr;
@@ -54,6 +59,8 @@ private:
     QPushButton * spk_btn_ = nullptr;
     QPushButton * cam_btn_ = nullptr;
     QPushButton * mon_btn_ = nullptr;
+    QPushButton * kb_btn_ = nullptr;
+    QPushButton * ms_btn_ = nullptr;
     QPushButton * cam_enum_btn_ = nullptr;
     QComboBox   * cam_combo_ = nullptr;
     QTextEdit   * log_view_ = nullptr;

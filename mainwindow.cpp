@@ -1,9 +1,9 @@
 #include "mainwindow.h"
+#include "input_capture.h"
 
 #include "cdc.h"
 
 #include <QApplication>
-#include <QCheckBox>
 #include <QComboBox>
 #include <QDateTime>
 #include <QDir>
@@ -33,10 +33,10 @@ MainWindow::MainWindow(QWidget * parent)
     QString logName = QString("cdc_sample_%1_%2.log")
                           .arg(QDateTime::currentDateTime().toString("yyyyMMdd-hhmmss"),
                                QString::number(QApplication::applicationPid()));
-    std::string log_path = QString("%1/%2").arg(dataDir, logName).toStdString();
-    CDCSetLogPath(log_path.c_str());
+    log_path_ = QString("%1/%2").arg(dataDir, logName).toStdString();
+    CDCSetLogPath(log_path_.c_str());
 
-    appendLog(QString("[INFO] Log path: %1").arg(log_path.c_str()));
+    appendLog(QString("[INFO] Log path: %1").arg(log_path_.c_str()));
 
     CDCSetLogCallback(&MainWindow::onLogCallback);
 
@@ -47,10 +47,15 @@ MainWindow::MainWindow(QWidget * parent)
         appendLog("[INFO] CDCCreate ok");
     else
         appendLog("[ERROR] CDCCreate failed");
+
+    input_capture_ = new InputCapture(this, cdc_);
 }
 
 MainWindow::~MainWindow()
 {
+    delete input_capture_;
+    input_capture_ = nullptr;
+
     instance_ = nullptr;
     if (opened_)
     {
@@ -106,6 +111,20 @@ void MainWindow::setupUi()
     devLayout->addStretch();
     mainLayout->addWidget(devGroup);
 
+    // 输入捕获开关
+    auto * inputGroup = new QGroupBox("Input Capture", this);
+    auto * inputLayout = new QHBoxLayout(inputGroup);
+    kb_btn_ = new QPushButton("KB", this);
+    kb_btn_->setCheckable(true);
+    kb_btn_->setToolTip("Toggle keyboard capture");
+    ms_btn_ = new QPushButton("MS", this);
+    ms_btn_->setCheckable(true);
+    ms_btn_->setToolTip("Toggle mouse capture");
+    inputLayout->addWidget(kb_btn_);
+    inputLayout->addWidget(ms_btn_);
+    inputLayout->addStretch();
+    mainLayout->addWidget(inputGroup);
+
     // 摄像头枚举
     auto * camGroup = new QGroupBox("Camera", this);
     auto * camLayout = new QHBoxLayout(camGroup);
@@ -131,6 +150,8 @@ void MainWindow::setupUi()
     connect(spk_btn_, &QPushButton::toggled, this, &MainWindow::onSpkToggle);
     connect(cam_btn_, &QPushButton::toggled, this, &MainWindow::onCamToggle);
     connect(mon_btn_, &QPushButton::toggled, this, &MainWindow::onMonToggle);
+    connect(kb_btn_, &QPushButton::toggled, this, &MainWindow::onKbToggle);
+    connect(ms_btn_, &QPushButton::toggled, this, &MainWindow::onMsToggle);
     connect(cam_enum_btn_, &QPushButton::clicked, this, &MainWindow::onCamEnum);
     connect(cam_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &MainWindow::onCamComboChanged);
@@ -139,9 +160,7 @@ void MainWindow::setupUi()
 void MainWindow::appendLog(const QString & text)
 {
     if (log_view_)
-    {
         log_view_->append(text);
-    }
 }
 
 void MainWindow::onConnect()
@@ -158,6 +177,10 @@ void MainWindow::onDisconnect()
         appendLog("[INFO] CDC closed");
     }
 
+    input_capture_->reset();
+
+    kb_btn_->setChecked(false);
+    ms_btn_->setChecked(false);
     connect_btn_->setEnabled(true);
     disconnect_btn_->setEnabled(false);
     mic_btn_->setChecked(false);
@@ -188,6 +211,18 @@ void MainWindow::onMonToggle(bool checked)
 {
     CDCMonState(cdc_, checked);
     appendLog(QString("[INFO] Mon %1").arg(checked ? "on" : "off"));
+}
+
+void MainWindow::onKbToggle(bool checked)
+{
+    input_capture_->setKbEnabled(checked);
+    appendLog(QString("[INFO] Keyboard capture %1").arg(checked ? "on" : "off"));
+}
+
+void MainWindow::onMsToggle(bool checked)
+{
+    input_capture_->setMsEnabled(checked);
+    appendLog(QString("[INFO] Mouse capture %1").arg(checked ? "on" : "off"));
 }
 
 void MainWindow::onLogCallback(CDCLogLevel level, const char * log)

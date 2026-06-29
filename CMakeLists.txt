@@ -107,10 +107,17 @@ set_property(TARGET cdc APPEND PROPERTY INTERFACE_INCLUDE_DIRECTORIES "${CDC_INC
 # -----------------------------------------------------------------------------
 # 可执行目标
 # -----------------------------------------------------------------------------
+if(CDC_SAMPLE_PLATFORM STREQUAL "mac")
+    list(APPEND SAMPLE_SOURCES input_capture_mac.mm)
+endif()
+
 set(SAMPLE_SOURCES
+    input_capture.cpp
+    input_capture.h
     main.cpp
     mainwindow.cpp
     mainwindow.h
+    ${SAMPLE_SOURCES}
 )
 
 if(CDC_SAMPLE_PLATFORM STREQUAL "windows")
@@ -123,6 +130,13 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     Qt6::Widgets
     cdc
 )
+
+if(CDC_SAMPLE_PLATFORM STREQUAL "mac")
+    target_link_libraries(${PROJECT_NAME} PRIVATE
+        "-framework Cocoa"
+        "-framework ApplicationServices"
+    )
+endif()
 
 # -----------------------------------------------------------------------------
 # macOS 编译/链接选项
