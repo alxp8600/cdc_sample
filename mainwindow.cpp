@@ -38,9 +38,10 @@ MainWindow::MainWindow(QWidget * parent)
 
     appendLog(QString("[INFO] Log path: %1").arg(log_path.c_str()));
 
+    CDCSetLogCallback(&MainWindow::onLogCallback);
+
     CDCCallback cb{};
-    cb.logFunc    = &MainWindow::onLogCallback;
-    cb.camListFunc = &MainWindow::onCamListCallback;
+    cb.cam_list_func = &MainWindow::onCamListCallback;
     cdc_ = CDCCreate(&cb);
     if (cdc_)
         appendLog("[INFO] CDCCreate ok");
@@ -273,16 +274,19 @@ void MainWindow::openSession()
         return;
     }
 
+    url_utf8_ = url.toStdString();   // persistent storage for cfg.url
+
     CDCConfig cfg{};
-    cfg.url                = url.toUtf8().constData();
+    cfg.url                = url_utf8_.c_str();
+    cfg.flow_id            = nullptr;
     cfg.wnd.wnd            = nullptr;  // demo: no video render widget
+    cfg.cam_name           = selected_cam_id_.empty() ? nullptr : selected_cam_id_.c_str();
+    cfg.cam_resolution     = nullptr;  // default resolution
+    cfg.cam_fps            = 30;
     cfg.connect_timeout_ms = 5000;
     cfg.retry_count        = 3;
-    cfg.mic_enabled        = mic_btn_->isChecked();
-    cfg.spk_enabled        = spk_btn_->isChecked();
-    cfg.cam_enabled        = cam_btn_->isChecked();
-    cfg.mon_enabled        = mon_btn_->isChecked();
-    cfg.cam_device_id      = selected_cam_id_.empty() ? nullptr : selected_cam_id_.c_str();
+    cfg.client_keepalive   = 1;
+    cfg.keepalive_interval_ms = 3000;
 
 
 

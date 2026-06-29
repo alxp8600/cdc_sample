@@ -3,6 +3,7 @@
 
 #include <QMainWindow>
 #include <QVector>
+#include <string>
 
 #include "cdc.h"
 
@@ -45,6 +46,7 @@ private:
     void * cdc_ = nullptr;
     bool opened_ = false;
 
+    std::string url_utf8_;       // 持久化 url.toStdString() 供 CDCOpen 使用
     QLineEdit   * addr_edit_ = nullptr;
     QPushButton * connect_btn_ = nullptr;
     QPushButton * disconnect_btn_ = nullptr;
