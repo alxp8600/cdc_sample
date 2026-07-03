@@ -32,6 +32,7 @@ private slots:
     void onMonToggle(bool checked);
     void onKbToggle(bool checked);
     void onMsToggle(bool checked);
+    void onGpToggle(bool checked);
     void onCamEnum();
     void onCamListUpdate(QVector<QPair<QString, QString>> devices);
     void onCamComboChanged(int index);
@@ -61,6 +62,7 @@ private:
     QPushButton * mon_btn_ = nullptr;
     QPushButton * kb_btn_ = nullptr;
     QPushButton * ms_btn_ = nullptr;
+    QPushButton * gp_btn_ = nullptr;
     QPushButton * cam_enum_btn_ = nullptr;
     QComboBox   * cam_combo_ = nullptr;
     QTextEdit   * log_view_ = nullptr;

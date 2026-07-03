@@ -38,6 +38,7 @@ void InputCapture::reset()
     removeSystemHooks();
     kb_enabled_ = false;
     ms_enabled_ = false;
+    gp_enabled_ = false;
     last_mouse_pos_ = QPoint();
 }
 
@@ -63,7 +64,18 @@ void InputCapture::setMsEnabled(bool enabled)
     last_mouse_pos_ = QPoint();
     if (enabled)
         installSystemHooks();
-    else if (!kb_enabled_)
+    else if (!kb_enabled_ && !gp_enabled_)
+        removeSystemHooks();
+}
+
+void InputCapture::setGpEnabled(bool enabled)
+{
+    if (gp_enabled_ == enabled)
+        return;
+    gp_enabled_ = enabled;
+    if (enabled)
+        installSystemHooks();
+    else if (!kb_enabled_ && !ms_enabled_)
         removeSystemHooks();
 }
 
@@ -89,8 +101,10 @@ void InputCapture::installSystemHooks()
 #ifdef Q_OS_MACOS
     extern void inputCaptureInstallKbMonitor(InputCapture * self);
     extern void inputCaptureInstallMsMonitor(InputCapture * self);
+    extern void inputCaptureInstallGpMonitor(InputCapture * self);
     extern void inputCaptureRemoveKbMonitor(InputCapture * self);
     extern void inputCaptureRemoveMsMonitor(InputCapture * self);
+    extern void inputCaptureRemoveGpMonitor(InputCapture * self);
 
     if (kb_enabled_ && !kb_monitor_)
     {
@@ -101,6 +115,11 @@ void InputCapture::installSystemHooks()
     {
         inputCaptureInstallMsMonitor(this);
         ms_monitor_ = reinterpret_cast<NSEventMonitor *>(1);
+    }
+    if (gp_enabled_ && !gp_monitor_)
+    {
+        inputCaptureInstallGpMonitor(this);
+        gp_monitor_ = reinterpret_cast<NSEventMonitor *>(1);
     }
 #endif
 }
@@ -123,6 +142,7 @@ void InputCapture::removeSystemHooks()
 #ifdef Q_OS_MACOS
     extern void inputCaptureRemoveKbMonitor(InputCapture * self);
     extern void inputCaptureRemoveMsMonitor(InputCapture * self);
+    extern void inputCaptureRemoveGpMonitor(InputCapture * self);
 
     if (kb_monitor_)
     {
@@ -133,6 +153,11 @@ void InputCapture::removeSystemHooks()
     {
         inputCaptureRemoveMsMonitor(this);
         ms_monitor_ = nullptr;
+    }
+    if (gp_monitor_)
+    {
+        inputCaptureRemoveGpMonitor(this);
+        gp_monitor_ = nullptr;
     }
 #endif
 }
@@ -198,6 +223,34 @@ void InputCapture::sendMsHWheel(int16_t delta)
     CDCSetMsWheel(cdc_, &wheel);
     QMetaObject::invokeMethod(MainWindow::instance(), "appendLog", Qt::QueuedConnection,
                               Q_ARG(QString, QString("ms wheel dir=1 delta=%1").arg(wheel.delta)));
+}
+
+void InputCapture::sendGpState(const CDCGpState & state)
+{
+    if (!cdc_)
+        return;
+    CDCSetGpState(cdc_, &state);
+    QMetaObject::invokeMethod(MainWindow::instance(), "appendLog", Qt::QueuedConnection,
+                              Q_ARG(QString, QString("gp state idx=%1 btn=0x%2 lt=%3 rt=%4 lx=%5 ly=%6 rx=%7 ry=%8")
+                                                .arg(state.index)
+                                                .arg(state.buttons, 8, 16, QChar('0'))
+                                                .arg(state.lt)
+                                                .arg(state.rt)
+                                                .arg(state.lx)
+                                                .arg(state.ly)
+                                                .arg(state.rx)
+                                                .arg(state.ry)));
+}
+
+void InputCapture::sendGpCmd(const CDCGpCmd & cmd)
+{
+    if (!cdc_)
+        return;
+    CDCSetGpCmd(cdc_, &cmd);
+    QMetaObject::invokeMethod(MainWindow::instance(), "appendLog", Qt::QueuedConnection,
+                              Q_ARG(QString, QString("gp cmd idx=%1 state=%2")
+                                                .arg(cmd.index)
+                                                .arg(cmd.state)));
 }
 
 // ===========================================================================
@@ -345,7 +398,7 @@ bool InputCapture::eventFilter(QObject * obj, QEvent * event)
 #endif
         {
             auto * me = static_cast<QMouseEvent *>(event);
-            const QPoint pos = me->globalPos();
+            const QPoint pos = me->globalPosition().toPoint();
 
             if (!last_mouse_pos_.isNull())
             {
@@ -468,6 +521,8 @@ void inputCaptureBridgeKbKey(void * cdc, uint8_t key, uint8_t state)
     kb.key   = key;
     kb.state = state;
     CDCSetKbKey(cdc, &kb);
+    QMetaObject::invokeMethod(MainWindow::instance(), "appendLog", Qt::QueuedConnection,
+                              Q_ARG(QString, QString("kb key=0x%1 state=%2").arg(kb.key, 2, 16, QChar('0')).arg(kb.state)));
 }
 
 void inputCaptureBridgeMsButton(void * cdc, uint8_t key, uint8_t state)
@@ -477,6 +532,8 @@ void inputCaptureBridgeMsButton(void * cdc, uint8_t key, uint8_t state)
     ms.key   = key;
     ms.state = state;
     CDCSetMsKey(cdc, &ms);
+    QMetaObject::invokeMethod(MainWindow::instance(), "appendLog", Qt::QueuedConnection,
+                              Q_ARG(QString, QString("ms key=0x%1 state=%2").arg(ms.key, 2, 16, QChar('0')).arg(ms.state)));
 }
 
 void inputCaptureBridgeMsMove(void * cdc, int16_t dx, int16_t dy)
@@ -486,6 +543,8 @@ void inputCaptureBridgeMsMove(void * cdc, int16_t dx, int16_t dy)
     move.x = dx;
     move.y = dy;
     CDCSetMsMove(cdc, &move);
+    QMetaObject::invokeMethod(MainWindow::instance(), "appendLog", Qt::QueuedConnection,
+                              Q_ARG(QString, QString("ms move dx=%1 dy=%2").arg(move.x).arg(move.y)));
 }
 
 void inputCaptureBridgeMsWheel(void * cdc, int16_t delta)
@@ -495,6 +554,8 @@ void inputCaptureBridgeMsWheel(void * cdc, int16_t delta)
     wheel.direction = 0;
     wheel.delta     = delta;
     CDCSetMsWheel(cdc, &wheel);
+    QMetaObject::invokeMethod(MainWindow::instance(), "appendLog", Qt::QueuedConnection,
+                              Q_ARG(QString, QString("ms wheel dir=0 delta=%1").arg(wheel.delta)));
 }
 
 void inputCaptureBridgeMsHWheel(void * cdc, int16_t delta)
@@ -504,6 +565,34 @@ void inputCaptureBridgeMsHWheel(void * cdc, int16_t delta)
     wheel.direction = 1;
     wheel.delta     = delta;
     CDCSetMsWheel(cdc, &wheel);
+    QMetaObject::invokeMethod(MainWindow::instance(), "appendLog", Qt::QueuedConnection,
+                              Q_ARG(QString, QString("ms wheel dir=1 delta=%1").arg(wheel.delta)));
+}
+
+void inputCaptureBridgeGpState(void * cdc, const CDCGpState * state)
+{
+    if (!cdc || !state) return;
+    CDCSetGpState(cdc, state);
+    QMetaObject::invokeMethod(MainWindow::instance(), "appendLog", Qt::QueuedConnection,
+                              Q_ARG(QString, QString("gp state idx=%1 btn=0x%2 lt=%3 rt=%4 lx=%5 ly=%6 rx=%7 ry=%8")
+                                                .arg(state->index)
+                                                .arg(state->buttons, 8, 16, QChar('0'))
+                                                .arg(state->lt)
+                                                .arg(state->rt)
+                                                .arg(state->lx)
+                                                .arg(state->ly)
+                                                .arg(state->rx)
+                                                .arg(state->ry)));
+}
+
+void inputCaptureBridgeGpCmd(void * cdc, const CDCGpCmd * cmd)
+{
+    if (!cdc || !cmd) return;
+    CDCSetGpCmd(cdc, cmd);
+    QMetaObject::invokeMethod(MainWindow::instance(), "appendLog", Qt::QueuedConnection,
+                              Q_ARG(QString, QString("gp cmd idx=%1 state=%2")
+                                                .arg(cmd->index)
+                                                .arg(cmd->state)));
 }
 
 } // extern "C"

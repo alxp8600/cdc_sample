@@ -120,8 +120,12 @@ void MainWindow::setupUi()
     ms_btn_ = new QPushButton("MS", this);
     ms_btn_->setCheckable(true);
     ms_btn_->setToolTip("Toggle mouse capture");
+    gp_btn_ = new QPushButton("GP", this);
+    gp_btn_->setCheckable(true);
+    gp_btn_->setToolTip("Toggle gamepad capture");
     inputLayout->addWidget(kb_btn_);
     inputLayout->addWidget(ms_btn_);
+    inputLayout->addWidget(gp_btn_);
     inputLayout->addStretch();
     mainLayout->addWidget(inputGroup);
 
@@ -152,6 +156,7 @@ void MainWindow::setupUi()
     connect(mon_btn_, &QPushButton::toggled, this, &MainWindow::onMonToggle);
     connect(kb_btn_, &QPushButton::toggled, this, &MainWindow::onKbToggle);
     connect(ms_btn_, &QPushButton::toggled, this, &MainWindow::onMsToggle);
+    connect(gp_btn_, &QPushButton::toggled, this, &MainWindow::onGpToggle);
     connect(cam_enum_btn_, &QPushButton::clicked, this, &MainWindow::onCamEnum);
     connect(cam_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &MainWindow::onCamComboChanged);
@@ -181,6 +186,7 @@ void MainWindow::onDisconnect()
 
     kb_btn_->setChecked(false);
     ms_btn_->setChecked(false);
+    gp_btn_->setChecked(false);
     connect_btn_->setEnabled(true);
     disconnect_btn_->setEnabled(false);
     mic_btn_->setChecked(false);
@@ -223,6 +229,12 @@ void MainWindow::onMsToggle(bool checked)
 {
     input_capture_->setMsEnabled(checked);
     appendLog(QString("[INFO] Mouse capture %1").arg(checked ? "on" : "off"));
+}
+
+void MainWindow::onGpToggle(bool checked)
+{
+    input_capture_->setGpEnabled(checked);
+    appendLog(QString("[INFO] Gamepad capture %1").arg(checked ? "on" : "off"));
 }
 
 void MainWindow::onLogCallback(CDCLogLevel level, const char * log)

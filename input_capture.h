@@ -32,6 +32,7 @@ public:
 
     bool isKbEnabled() const { return kb_enabled_; }
     bool isMsEnabled() const { return ms_enabled_; }
+    bool isGpEnabled() const { return gp_enabled_; }
 
     void * cdcHandle() const { return cdc_; }
 
@@ -39,6 +40,7 @@ public:
 
     void setKbEnabled(bool enabled);
     void setMsEnabled(bool enabled);
+    void setGpEnabled(bool enabled);
 
     // reset: 关闭所有捕获
     void reset();
@@ -49,6 +51,8 @@ public:
     void sendMsMove(int16_t dx, int16_t dy);
     void sendMsWheel(int16_t delta);
     void sendMsHWheel(int16_t delta);
+    void sendGpState(const CDCGpState & state);
+    void sendGpCmd(const CDCGpCmd & cmd);
 
 protected:
     bool eventFilter(QObject * obj, QEvent * event) override;
@@ -64,6 +68,7 @@ private:
 
     bool kb_enabled_ = false;
     bool ms_enabled_ = false;
+    bool gp_enabled_ = false;
     QPoint last_mouse_pos_;
 
 #ifdef Q_OS_WIN
@@ -75,6 +80,7 @@ private:
 #ifdef Q_OS_MACOS
     NSEventMonitor * kb_monitor_ = nullptr;
     NSEventMonitor * ms_monitor_ = nullptr;
+    NSEventMonitor * gp_monitor_ = nullptr;
 #endif
     static InputCapture * active_instance_;
 };

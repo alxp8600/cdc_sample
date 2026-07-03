@@ -171,6 +171,7 @@ if(CDC_SAMPLE_PLATFORM STREQUAL "mac")
     target_link_libraries(${PROJECT_NAME} PRIVATE
         "-framework Cocoa"
         "-framework ApplicationServices"
+        "-framework GameController"
     )
 endif()
 

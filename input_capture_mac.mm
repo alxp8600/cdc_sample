@@ -442,4 +442,197 @@ void inputCaptureRemoveMsMonitor(InputCapture * /*self*/)
     NSLog(@"[InputCapture] mouse monitor thread stopped");
 }
 
+// ===========================================================================
+// Gamepad — Apple Game Controller framework
+// 监听 GCController 连接/断开通知，轮询 extendedGamepad 状态并通过
+// CDCGpState / CDCGpCmd 上报
+// ===========================================================================
+
+#import <GameController/GameController.h>
+
+static void (^g_gpConnectHandler)(NSNotification *) = nil;
+static void (^g_gpDisconnectHandler)(NSNotification *) = nil;
+static id g_gpConnectObserver = nil;
+static id g_gpDisconnectObserver = nil;
+static GCController * g_gpController = nil;
+static bool g_gpRunning = false;
+
+// 将 GCController 的物理按钮映射到 CDCGamepadButtonType
+static int32_t mapGCExtendedGamepadButtons(GCExtendedGamepad * gp)
+{
+    int32_t buttons = 0;
+
+    if (gp.dpad.up.isPressed)    buttons |= CDCGamepadButtonDpadUp;
+    if (gp.dpad.down.isPressed)  buttons |= CDCGamepadButtonDpadDown;
+    if (gp.dpad.left.isPressed)  buttons |= CDCGamepadButtonDpadLeft;
+    if (gp.dpad.right.isPressed) buttons |= CDCGamepadButtonDpadRight;
+
+    if (gp.buttonA.isPressed)     buttons |= CDCGamepadButtonA;
+    if (gp.buttonB.isPressed)     buttons |= CDCGamepadButtonB;
+    if (gp.buttonX.isPressed)     buttons |= CDCGamepadButtonX;
+    if (gp.buttonY.isPressed)     buttons |= CDCGamepadButtonY;
+
+    if (gp.leftShoulder.isPressed)  buttons |= CDCGamepadButtonLeftShoulder;
+    if (gp.rightShoulder.isPressed) buttons |= CDCGamepadButtonRightShoulder;
+
+    if (gp.leftThumbstickButton != nil && gp.leftThumbstickButton.isPressed)
+        buttons |= CDCGamepadButtonLeftThumb;
+    if (gp.rightThumbstickButton != nil && gp.rightThumbstickButton.isPressed)
+        buttons |= CDCGamepadButtonRightThumb;
+
+    if (gp.buttonMenu != nil && gp.buttonMenu.isPressed)
+        buttons |= CDCGamepadButtonStart;
+
+    if (gp.buttonOptions != nil && gp.buttonOptions.isPressed)
+        buttons |= CDCGamepadButtonBack;
+
+    return buttons;
+}
+
+static void sendGpStateFromController(GCController * controller)
+{
+    InputCapture * cap = getActiveCapture();
+    if (!cap || !cap->isGpEnabled())
+        return;
+
+    GCExtendedGamepad * gp = controller.extendedGamepad;
+    if (!gp)
+        return;
+
+    CDCGpState state;
+    state.index   = static_cast<uint8_t>(controller.playerIndex);
+    state.buttons = mapGCExtendedGamepadButtons(gp);
+
+    // 扳机: 0.0 ~ 1.0 → 0 ~ 255
+    state.lt = static_cast<uint8_t>(gp.leftTrigger.value * 255.0f);
+    state.rt = static_cast<uint8_t>(gp.rightTrigger.value * 255.0f);
+
+    // 摇杆: -1.0 ~ 1.0 → INT16_MIN ~ INT16_MAX
+    auto mapAxis = [](float v) -> int16_t {
+        if (v < -1.0f) v = -1.0f;
+        if (v >  1.0f) v =  1.0f;
+        return static_cast<int16_t>(v * 32767.0f);
+    };
+
+    state.lx = mapAxis(gp.leftThumbstick.xAxis.value);
+    state.ly = mapAxis(gp.leftThumbstick.yAxis.value);
+    state.rx = mapAxis(gp.rightThumbstick.xAxis.value);
+    state.ry = mapAxis(gp.rightThumbstick.yAxis.value);
+
+    cap->sendGpState(state);
+}
+
+void inputCaptureInstallGpMonitor(InputCapture * /*self*/)
+{
+    if (g_gpRunning)
+        return;
+
+    // 注册连接通知
+    g_gpConnectHandler = ^(NSNotification * note) {
+        GCController * controller = note.object;
+        if (!controller || controller.extendedGamepad == nil)
+            return;
+
+        g_gpController = controller;
+
+        // 发送插入命令
+        CDCGpCmd cmd;
+        cmd.index = static_cast<uint8_t>(controller.playerIndex);
+        cmd.state = 0; // 插入
+        InputCapture * cap = getActiveCapture();
+        if (cap && cap->isGpEnabled())
+            cap->sendGpCmd(cmd);
+
+        NSLog(@"[InputCapture] gamepad connected: %@ playerIndex=%ld",
+              controller.vendorName, (long)controller.playerIndex);
+
+        // 设置值变化回调 — 每次手柄状态变化时上报
+        controller.extendedGamepad.valueChangedHandler = ^(GCExtendedGamepad * /*gp*/,
+                                                            GCControllerElement * /*element*/) {
+            sendGpStateFromController(controller);
+        };
+    };
+
+    g_gpDisconnectHandler = ^(NSNotification * note) {
+        GCController * controller = note.object;
+        if (!controller)
+            return;
+
+        // 发送拔出命令
+        CDCGpCmd cmd;
+        cmd.index = static_cast<uint8_t>(controller.playerIndex);
+        cmd.state = 1; // 拔出
+        InputCapture * cap = getActiveCapture();
+        if (cap && cap->isGpEnabled())
+            cap->sendGpCmd(cmd);
+
+        NSLog(@"[InputCapture] gamepad disconnected: %@ playerIndex=%ld",
+              controller.vendorName, (long)controller.playerIndex);
+
+        if (g_gpController == controller)
+            g_gpController = nil;
+    };
+
+    g_gpConnectObserver = [[NSNotificationCenter defaultCenter]
+        addObserverForName:GCControllerDidConnectNotification
+                    object:nil
+                     queue:[NSOperationQueue mainQueue]
+                usingBlock:g_gpConnectHandler];
+
+    g_gpDisconnectObserver = [[NSNotificationCenter defaultCenter]
+        addObserverForName:GCControllerDidDisconnectNotification
+                    object:nil
+                     queue:[NSOperationQueue mainQueue]
+                usingBlock:g_gpDisconnectHandler];
+
+    g_gpRunning = true;
+
+    // 启动手柄发现 — GCController 默认会检测已连接的手柄
+    [GCController startWirelessControllerDiscoveryWithCompletionHandler:^{
+        NSLog(@"[InputCapture] wireless controller discovery completed");
+    }];
+
+    // 检查当前是否已有连接的手柄
+    NSArray<GCController *> * controllers = [GCController controllers];
+    if (controllers.count > 0)
+    {
+        for (GCController * c in controllers)
+        {
+            if (c.extendedGamepad != nil)
+            {
+                g_gpController = c;
+                g_gpConnectHandler([NSNotification notificationWithName:GCControllerDidConnectNotification
+                                                                  object:c]);
+                break;
+            }
+        }
+    }
+
+    NSLog(@"[InputCapture] gamepad monitor installed");
+}
+
+void inputCaptureRemoveGpMonitor(InputCapture * /*self*/)
+{
+    if (!g_gpRunning)
+        return;
+
+    if (g_gpDisconnectObserver)
+    {
+        [[NSNotificationCenter defaultCenter] removeObserver:g_gpDisconnectObserver];
+        g_gpDisconnectObserver = nil;
+    }
+    if (g_gpConnectObserver)
+    {
+        [[NSNotificationCenter defaultCenter] removeObserver:g_gpConnectObserver];
+        g_gpConnectObserver = nil;
+    }
+
+    g_gpConnectHandler = nil;
+    g_gpDisconnectHandler = nil;
+    g_gpController = nil;
+    g_gpRunning = false;
+
+    NSLog(@"[InputCapture] gamepad monitor removed");
+}
+
 #endif // Q_OS_MACOS
