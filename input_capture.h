@@ -35,11 +35,20 @@ public:
 
     void * cdcHandle() const { return cdc_; }
 
+    static InputCapture * activeInstance() { return active_instance_; }
+
     void setKbEnabled(bool enabled);
     void setMsEnabled(bool enabled);
 
     // reset: 关闭所有捕获
     void reset();
+
+    // send helpers — 调用 CDC API + 日志（macOS CGEventTap 回调也使用）
+    void sendKbKey(uint8_t key, uint8_t state);
+    void sendMsButton(uint8_t key, uint8_t state);
+    void sendMsMove(int16_t dx, int16_t dy);
+    void sendMsWheel(int16_t delta);
+    void sendMsHWheel(int16_t delta);
 
 protected:
     bool eventFilter(QObject * obj, QEvent * event) override;
@@ -47,12 +56,6 @@ protected:
 private:
     void installSystemHooks();
     void removeSystemHooks();
-
-    void sendKbKey(uint8_t key, uint8_t state);
-    void sendMsButton(uint8_t key, uint8_t state);
-    void sendMsMove(int16_t dx, int16_t dy);
-    void sendMsWheel(int16_t delta);
-    void sendMsHWheel(int16_t delta);
 
     static uint8_t mapQtKeyToCDC(int qtKey, quint32 nativeVirtualKey);
     static uint8_t mapQtMouseButtonToCDC(Qt::MouseButton button);

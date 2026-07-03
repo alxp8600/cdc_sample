@@ -323,9 +323,14 @@ void MainWindow::openSession()
     cfg.client_keepalive   = 1;
     cfg.keepalive_interval_ms = 3000;
 
-
-
     CDCOpen(cdc_, &cfg);
+
+    // 设置各模块开关状态 (mic/spk/cam/mon 通过独立 API 控制)
+    CDCMicState(cdc_, mic_btn_->isChecked());
+    CDCSpkState(cdc_, spk_btn_->isChecked());
+    CDCCamState(cdc_, cam_btn_->isChecked());
+    CDCMonState(cdc_, mon_btn_->isChecked());
+
     opened_ = true;
     appendLog(QString("[INFO] CDCOpen called"));
 

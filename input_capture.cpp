@@ -93,9 +93,15 @@ void InputCapture::installSystemHooks()
     extern void inputCaptureRemoveMsMonitor(InputCapture * self);
 
     if (kb_enabled_ && !kb_monitor_)
+    {
         inputCaptureInstallKbMonitor(this);
+        kb_monitor_ = reinterpret_cast<NSEventMonitor *>(1);
+    }
     if (ms_enabled_ && !ms_monitor_)
+    {
         inputCaptureInstallMsMonitor(this);
+        ms_monitor_ = reinterpret_cast<NSEventMonitor *>(1);
+    }
 #endif
 }
 
@@ -302,13 +308,9 @@ bool InputCapture::eventFilter(QObject * obj, QEvent * event)
 {
     if (event->type() == QEvent::KeyPress || event->type() == QEvent::KeyRelease)
     {
-#ifndef Q_OS_WIN
-        if (kb_enabled_ && cdc_)
-#endif
-#if defined(Q_OS_WIN)
-        // Windows 上系统钩子已处理，eventFilter 不再重复发送
-#elif defined(Q_OS_MACOS)
-        // macOS 上监听从系统钩子回调发出，eventFilter 也参与
+#if defined(Q_OS_WIN) || defined(Q_OS_MACOS)
+        // Windows/macOS: 系统钩子已处理，eventFilter 不再重复发送
+#else
         if (kb_enabled_ && cdc_)
 #endif
         {
@@ -323,12 +325,9 @@ bool InputCapture::eventFilter(QObject * obj, QEvent * event)
     else if (event->type() == QEvent::MouseButtonPress ||
              event->type() == QEvent::MouseButtonRelease)
     {
-#ifndef Q_OS_WIN
-        if (ms_enabled_ && cdc_)
-#endif
-#if defined(Q_OS_WIN)
-        // Windows 上跳过
-#elif defined(Q_OS_MACOS)
+#if defined(Q_OS_WIN) || defined(Q_OS_MACOS)
+        // Windows/macOS: 系统钩子已处理，跳过
+#else
         if (ms_enabled_ && cdc_)
 #endif
         {
@@ -339,12 +338,9 @@ bool InputCapture::eventFilter(QObject * obj, QEvent * event)
     }
     else if (event->type() == QEvent::MouseMove)
     {
-#ifndef Q_OS_WIN
-        if (ms_enabled_ && cdc_)
-#endif
-#if defined(Q_OS_WIN)
-        // Windows 上跳过
-#elif defined(Q_OS_MACOS)
+#if defined(Q_OS_WIN) || defined(Q_OS_MACOS)
+        // Windows/macOS: 系统钩子已处理，跳过
+#else
         if (ms_enabled_ && cdc_)
 #endif
         {
@@ -361,12 +357,9 @@ bool InputCapture::eventFilter(QObject * obj, QEvent * event)
     }
     else if (event->type() == QEvent::Wheel)
     {
-#ifndef Q_OS_WIN
-        if (ms_enabled_ && cdc_)
-#endif
-#if defined(Q_OS_WIN)
-        // Windows 上跳过
-#elif defined(Q_OS_MACOS)
+#if defined(Q_OS_WIN) || defined(Q_OS_MACOS)
+        // Windows/macOS: 系统钩子已处理，跳过
+#else
         if (ms_enabled_ && cdc_)
 #endif
         {
@@ -465,7 +458,7 @@ extern "C" {
 
 InputCapture * inputCaptureGetActive()
 {
-    return InputCapture::active_instance_;
+    return InputCapture::activeInstance();
 }
 
 void inputCaptureBridgeKbKey(void * cdc, uint8_t key, uint8_t state)

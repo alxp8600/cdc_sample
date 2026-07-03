@@ -1,27 +1,27 @@
 // ---------------------------------------------------------------------------
 // input_capture_mac.mm — macOS CGEventTap 系统级全局键盘/鼠标监听
 // 需要辅助功能权限 (System Preferences → Privacy → Accessibility)
+//
+// 重要: CGEventTap 的 CFRunLoopSource 必须添加到一个持续运行的 RunLoop 中。
+// Qt 的主线程 RunLoop 不能可靠地 pump CGEventTap 事件，因此我们使用专用线程
+// 来运行 CFRunLoop，确保回调能正常触发。
 // ---------------------------------------------------------------------------
-#ifdef Q_OS_MACOS
-
 #include "input_capture.h"
+
+#ifdef Q_OS_MACOS
 
 #import <Cocoa/Cocoa.h>
 #import <CoreGraphics/CoreGraphics.h>
+#import <ApplicationServices/ApplicationServices.h>
+#import <IOKit/hidsystem/IOHIDLib.h>
 
-// ---- 桥接函数声明 (实现在 input_capture.cpp) ----
-extern "C" {
-void inputCaptureBridgeKbKey(void * cdc, uint8_t key, uint8_t state);
-void inputCaptureBridgeMsButton(void * cdc, uint8_t key, uint8_t state);
-void inputCaptureBridgeMsMove(void * cdc, int16_t dx, int16_t dy);
-void inputCaptureBridgeMsWheel(void * cdc, int16_t delta);
-void inputCaptureBridgeMsHWheel(void * cdc, int16_t delta);
-}
+#include <pthread.h>
+#include <atomic>
 
 // ---- 获取当前活跃的 InputCapture 实例 ----
+extern "C" InputCapture * inputCaptureGetActive();
 static InputCapture * getActiveCapture()
 {
-    extern InputCapture * inputCaptureGetActive();
     return inputCaptureGetActive();
 }
 
@@ -108,10 +108,11 @@ static CGEventRef kbEventTapCallback(CGEventTapProxy /*proxy*/,
         CGKeyCode keyCode = static_cast<CGKeyCode>(
             CGEventGetIntegerValueField(event, kCGKeyboardEventKeycode));
         uint8_t cdcKey = mapCGKeyToCDC(keyCode);
+        NSLog(@"[InputCapture] kb callback: type=%d keyCode=%d cdcKey=%d", (int)type, (int)keyCode, (int)cdcKey);
         if (cdcKey != 0)
         {
             uint8_t state = (type == kCGEventKeyDown) ? 1 : 0;
-            inputCaptureBridgeKbKey(cap->cdcHandle(), cdcKey, state);
+            cap->sendKbKey(cdcKey, state);
         }
     }
 
@@ -127,30 +128,28 @@ static CGEventRef msEventTapCallback(CGEventTapProxy /*proxy*/,
     if (!cap || !cap->isMsEnabled())
         return event;
 
-    void * cdc = cap->cdcHandle();
-
     switch (type)
     {
     case kCGEventLeftMouseDown:
-        inputCaptureBridgeMsButton(cdc, CDCKeyLButton, 1); break;
+        cap->sendMsButton(CDCKeyLButton, 1); break;
     case kCGEventLeftMouseUp:
-        inputCaptureBridgeMsButton(cdc, CDCKeyLButton, 0); break;
+        cap->sendMsButton(CDCKeyLButton, 0); break;
     case kCGEventRightMouseDown:
-        inputCaptureBridgeMsButton(cdc, CDCKeyRButton, 1); break;
+        cap->sendMsButton(CDCKeyRButton, 1); break;
     case kCGEventRightMouseUp:
-        inputCaptureBridgeMsButton(cdc, CDCKeyRButton, 0); break;
+        cap->sendMsButton(CDCKeyRButton, 0); break;
     case kCGEventOtherMouseDown:
     {
         int btn = static_cast<int>(CGEventGetIntegerValueField(event, kCGMouseEventButtonNumber));
         uint8_t key = (btn == 2) ? CDCKeyMButton : (btn == 3) ? CDCKeyXButton1 : (btn == 4) ? CDCKeyXButton2 : 0;
-        if (key) inputCaptureBridgeMsButton(cdc, key, 1);
+        if (key) cap->sendMsButton(key, 1);
         break;
     }
     case kCGEventOtherMouseUp:
     {
         int btn = static_cast<int>(CGEventGetIntegerValueField(event, kCGMouseEventButtonNumber));
         uint8_t key = (btn == 2) ? CDCKeyMButton : (btn == 3) ? CDCKeyXButton1 : (btn == 4) ? CDCKeyXButton2 : 0;
-        if (key) inputCaptureBridgeMsButton(cdc, key, 0);
+        if (key) cap->sendMsButton(key, 0);
         break;
     }
     case kCGEventMouseMoved:
@@ -160,15 +159,15 @@ static CGEventRef msEventTapCallback(CGEventTapProxy /*proxy*/,
     {
         int64_t dx = CGEventGetIntegerValueField(event, kCGMouseEventDeltaX);
         int64_t dy = CGEventGetIntegerValueField(event, kCGMouseEventDeltaY);
-        inputCaptureBridgeMsMove(cdc, static_cast<int16_t>(dx), static_cast<int16_t>(dy));
+        cap->sendMsMove(static_cast<int16_t>(dx), static_cast<int16_t>(dy));
         break;
     }
     case kCGEventScrollWheel:
     {
         int64_t dy = CGEventGetIntegerValueField(event, kCGScrollWheelEventDeltaAxis1);
         int64_t dx = CGEventGetIntegerValueField(event, kCGScrollWheelEventDeltaAxis2);
-        if (dy != 0) inputCaptureBridgeMsWheel(cdc, static_cast<int16_t>(dy));
-        if (dx != 0) inputCaptureBridgeMsHWheel(cdc, static_cast<int16_t>(dx));
+        if (dy != 0) cap->sendMsWheel(static_cast<int16_t>(dy));
+        if (dx != 0) cap->sendMsHWheel(static_cast<int16_t>(dx));
         break;
     }
     default:
@@ -179,83 +178,268 @@ static CGEventRef msEventTapCallback(CGEventTapProxy /*proxy*/,
 }
 
 // ===========================================================================
+// Accessibility 权限检查 — CGEventTapCreate 返回 NULL 的最常见原因
+// ===========================================================================
+
+static bool checkAccessibilityPermission()
+{
+    // AXIsProcessTrustedWithOptions 在 macOS 10.9+ 可用
+    // 传入 kAXTrustedCheckOptionPrompt => true 会在未授权时弹出系统授权对话框
+    NSDictionary * options = @{
+        (__bridge NSString *)kAXTrustedCheckOptionPrompt : @YES
+    };
+    Boolean trusted = AXIsProcessTrustedWithOptions((__bridge CFDictionaryRef)options);
+    NSLog(@"[InputCapture] AXIsProcessTrustedWithOptions returned: %d", (int)trusted);
+    if (!trusted)
+    {
+        NSLog(@"[InputCapture] Accessibility permission NOT granted. "
+              @"Opening System Settings → Privacy & Security → Accessibility...");
+
+        // 直接打开系统设置的辅助功能页面，方便用户添加授权
+        NSString * settingsURL = @"x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
+        [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:settingsURL]];
+
+        // 弹出 NSAlert 提示用户需要手动授权
+        dispatch_async(dispatch_get_main_queue(), ^{
+            NSAlert * alert = [[NSAlert alloc] init];
+            alert.messageText = @"需要辅助功能权限";
+            alert.informativeText = @"CDC Sample 需要辅助功能权限才能捕获全局键盘和鼠标事件。\n\n"
+                                     @"请在「系统设置 → 隐私与安全性 → 辅助功能」中添加并勾选 CDC Sample，"
+                                     @"然后重新启动输入捕获。";
+            alert.alertStyle = NSAlertStyleWarning;
+            [alert addButtonWithTitle:@"确定"];
+            [alert runModal];
+        });
+    }
+    return trusted == YES;
+}
+
+// ===========================================================================
+// Input Monitoring 权限检查 (macOS 10.15+)
+//
+// 关键: macOS 将权限拆分为两个独立的 TCC 权限：
+//   - Accessibility（辅助功能）→ 控制鼠标事件监听、UI 控制
+//   - Input Monitoring（输入监控）→ 控制键盘事件监听 (kCGEventKeyDown/Up)
+//
+// 鼠标 EventTap 只需要 Accessibility 权限，但键盘 EventTap 还需要
+// Input Monitoring 权限。这就是"鼠标可以、键盘不行"的根因。
+// ===========================================================================
+
+static bool checkInputMonitoringPermission()
+{
+    // IOHIDCheckAccess 在 macOS 10.15 (Catalina) 引入
+    // kIOHIDRequestTypeListenEvent 对应"输入监控"权限
+    // 返回值: kIOHIDAccessTypeGranted=0, kIOHIDAccessTypeDenied=1,
+    //         kIOHIDAccessTypeUnknown=2
+    IOHIDAccessType accessType = IOHIDCheckAccess(kIOHIDRequestTypeListenEvent);
+    NSLog(@"[InputCapture] IOHIDCheckAccess(kIOHIDRequestTypeListenEvent) returned: %d", (int)accessType);
+
+    if (accessType != kIOHIDAccessTypeGranted)
+    {
+        NSLog(@"[InputCapture] Input Monitoring permission NOT granted. "
+              @"Opening System Settings → Privacy & Security → Input Monitoring...");
+
+        // 请求权限 — IOHIDRequestAccess 会弹出系统授权对话框
+        // 注意: 此函数只能调用一次，重复调用不会再次弹窗
+        bool granted = IOHIDRequestAccess(kIOHIDRequestTypeListenEvent);
+        NSLog(@"[InputCapture] IOHIDRequestAccess returned: %d", (int)granted);
+
+        if (!granted)
+        {
+            // 直接打开系统设置的"输入监控"页面
+            // Privacy_ListenEvent 对应"输入监控"（键盘监听）
+            NSString * settingsURL = @"x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent";
+            [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:settingsURL]];
+
+            // 弹出 NSAlert 提示用户需要手动授权
+            dispatch_async(dispatch_get_main_queue(), ^{
+                NSAlert * alert = [[NSAlert alloc] init];
+                alert.messageText = @"需要输入监控权限";
+                alert.informativeText = @"CDC Sample 需要输入监控权限才能捕获全局键盘事件。\n\n"
+                                         @"请在「系统设置 → 隐私与安全性 → 输入监控」中添加并勾选 CDC Sample，"
+                                         @"然后重新启动输入捕获。\n\n"
+                                         @"注意：这与「辅助功能」是两个独立的权限，鼠标只需要辅助功能权限，"
+                                         @"但键盘还需要输入监控权限。";
+                alert.alertStyle = NSAlertStyleWarning;
+                [alert addButtonWithTitle:@"确定"];
+                [alert runModal];
+            });
+        }
+        return granted;
+    }
+    return true;
+}
+
+// ===========================================================================
+// 专用线程 EventTap 管理
+//
+// CGEventTap 的 CFRunLoopSource 必须添加到一个持续运行的 RunLoop 中。
+// Qt 主线程的 RunLoop 不能可靠地 pump CGEventTap 事件，因此我们为 kb 和 ms
+// 各创建一个专用 pthread，在线程内创建 EventTap + RunLoopSource 并 CFRunLoopRun()。
+// remove 时通过 CFRunLoopStop() 停止对应线程的 RunLoop。
+// ===========================================================================
+
+struct EventTapContext
+{
+    CGEventMask        mask;
+    CGEventTapCallBack callback;
+    CFMachPortRef      tap            = nullptr;
+    CFRunLoopSourceRef runLoopSource  = nullptr;
+    CFRunLoopRef       runLoop        = nullptr;
+    pthread_t          thread         = 0;
+    std::atomic<bool>  running{false};
+};
+
+static EventTapContext g_kbCtx;
+static EventTapContext g_msCtx;
+
+static void * eventTapThreadFunc(void * arg)
+{
+    @autoreleasepool
+    {
+        auto * ctx = static_cast<EventTapContext *>(arg);
+
+        // 获取当前线程的 RunLoop
+        ctx->runLoop = CFRunLoopGetCurrent();
+
+        // 在此线程内创建 CGEventTap
+        ctx->tap = CGEventTapCreate(kCGHIDEventTap, kCGHeadInsertEventTap,
+                                     kCGEventTapOptionListenOnly, ctx->mask,
+                                     ctx->callback, nullptr);
+        if (!ctx->tap)
+        {
+            NSLog(@"[InputCapture] CGEventTapCreate returned NULL on background thread.");
+            ctx->running = false;
+            return nullptr;
+        }
+
+        ctx->runLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, ctx->tap, 0);
+        CFRunLoopAddSource(ctx->runLoop, ctx->runLoopSource, kCFRunLoopCommonModes);
+        CGEventTapEnable(ctx->tap, true);
+
+        NSLog(@"[InputCapture] event tap installed on background thread, entering CFRunLoopRun");
+
+        // 进入 RunLoop — 会一直阻塞直到 CFRunLoopStop() 被调用
+        CFRunLoopRun();
+
+        NSLog(@"[InputCapture] CFRunLoopRun exited, cleaning up event tap");
+
+        // 清理
+        CGEventTapEnable(ctx->tap, false);
+        CFRunLoopRemoveSource(ctx->runLoop, ctx->runLoopSource, kCFRunLoopCommonModes);
+        CFRelease(ctx->runLoopSource);
+        ctx->runLoopSource = nullptr;
+        CFRelease(ctx->tap);
+        ctx->tap = nullptr;
+        ctx->runLoop = nullptr;
+        ctx->running = false;
+
+        return nullptr;
+    }
+}
+
+// ===========================================================================
 // install / remove — 由 input_capture.cpp 调用
 // ===========================================================================
 
-static CFMachPortRef g_kbTap = nullptr;
-static CFRunLoopSourceRef g_kbRunLoopSource = nullptr;
-static CFMachPortRef g_msTap = nullptr;
-static CFRunLoopSourceRef g_msRunLoopSource = nullptr;
-
 void inputCaptureInstallKbMonitor(InputCapture * /*self*/)
 {
-    if (g_kbTap) return;
+    if (g_kbCtx.running.load())
+        return;
 
-    CGEventMask mask = CGEventMaskBit(kCGEventKeyDown) | CGEventMaskBit(kCGEventKeyUp);
-    g_kbTap = CGEventTapCreate(kCGHIDEventTap, kCGHeadInsertEventTap,
-                                kCGEventTapOptionListenOnly, mask,
-                                kbEventTapCallback, nullptr);
-    if (!g_kbTap)
+    // 先检查 Accessibility 权限，未授权则 CGEventTapCreate 必定返回 NULL
+    if (!checkAccessibilityPermission())
+        return;
+
+    // 准备 context
+    g_kbCtx.mask = CGEventMaskBit(kCGEventKeyDown) | CGEventMaskBit(kCGEventKeyUp);
+    g_kbCtx.callback = kbEventTapCallback;
+    g_kbCtx.running = true;
+
+    // 创建专用线程运行 CGEventTap
+    int ret = pthread_create(&g_kbCtx.thread, nullptr, eventTapThreadFunc, &g_kbCtx);
+    if (ret != 0)
     {
-        NSLog(@"[InputCapture] keyboard event tap failed — check Accessibility permissions.");
+        NSLog(@"[InputCapture] pthread_create for keyboard failed: %d", ret);
+        g_kbCtx.running = false;
         return;
     }
-    g_kbRunLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, g_kbTap, 0);
-    CFRunLoopAddSource(CFRunLoopGetCurrent(), g_kbRunLoopSource, kCFRunLoopCommonModes);
-    CGEventTapEnable(g_kbTap, true);
+
+    NSLog(@"[InputCapture] keyboard monitor thread started");
 }
 
 void inputCaptureRemoveKbMonitor(InputCapture * /*self*/)
 {
-    if (!g_kbTap) return;
-    CGEventTapEnable(g_kbTap, false);
-    if (g_kbRunLoopSource)
+    if (!g_kbCtx.running.load() && !g_kbCtx.tap)
+        return;
+
+    // 在主线程停止后台线程的 RunLoop
+    if (g_kbCtx.runLoop)
     {
-        CFRunLoopRemoveSource(CFRunLoopGetCurrent(), g_kbRunLoopSource, kCFRunLoopCommonModes);
-        CFRelease(g_kbRunLoopSource);
-        g_kbRunLoopSource = nullptr;
+        CFRunLoopStop(g_kbCtx.runLoop);
     }
-    CFRelease(g_kbTap);
-    g_kbTap = nullptr;
+
+    // 等待线程退出
+    if (g_kbCtx.thread)
+    {
+        pthread_join(g_kbCtx.thread, nullptr);
+        g_kbCtx.thread = 0;
+    }
+
+    NSLog(@"[InputCapture] keyboard monitor thread stopped");
 }
 
 void inputCaptureInstallMsMonitor(InputCapture * /*self*/)
 {
-    if (g_msTap) return;
+    if (g_msCtx.running.load())
+        return;
 
-    CGEventMask mask =
+    // 先检查 Accessibility 权限，未授权则 CGEventTapCreate 必定返回 NULL
+    if (!checkAccessibilityPermission())
+        return;
+
+    // 准备 context
+    g_msCtx.mask =
         CGEventMaskBit(kCGEventLeftMouseDown) | CGEventMaskBit(kCGEventLeftMouseUp) |
         CGEventMaskBit(kCGEventRightMouseDown) | CGEventMaskBit(kCGEventRightMouseUp) |
         CGEventMaskBit(kCGEventOtherMouseDown) | CGEventMaskBit(kCGEventOtherMouseUp) |
         CGEventMaskBit(kCGEventMouseMoved) | CGEventMaskBit(kCGEventLeftMouseDragged) |
         CGEventMaskBit(kCGEventRightMouseDragged) | CGEventMaskBit(kCGEventOtherMouseDragged) |
         CGEventMaskBit(kCGEventScrollWheel);
+    g_msCtx.callback = msEventTapCallback;
+    g_msCtx.running = true;
 
-    g_msTap = CGEventTapCreate(kCGHIDEventTap, kCGHeadInsertEventTap,
-                                kCGEventTapOptionListenOnly, mask,
-                                msEventTapCallback, nullptr);
-    if (!g_msTap)
+    // 创建专用线程运行 CGEventTap
+    int ret = pthread_create(&g_msCtx.thread, nullptr, eventTapThreadFunc, &g_msCtx);
+    if (ret != 0)
     {
-        NSLog(@"[InputCapture] mouse event tap failed — check Accessibility permissions.");
+        NSLog(@"[InputCapture] pthread_create for mouse failed: %d", ret);
+        g_msCtx.running = false;
         return;
     }
-    g_msRunLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, g_msTap, 0);
-    CFRunLoopAddSource(CFRunLoopGetCurrent(), g_msRunLoopSource, kCFRunLoopCommonModes);
-    CGEventTapEnable(g_msTap, true);
+
+    NSLog(@"[InputCapture] mouse monitor thread started");
 }
 
 void inputCaptureRemoveMsMonitor(InputCapture * /*self*/)
 {
-    if (!g_msTap) return;
-    CGEventTapEnable(g_msTap, false);
-    if (g_msRunLoopSource)
+    if (!g_msCtx.running.load() && !g_msCtx.tap)
+        return;
+
+    // 在主线程停止后台线程的 RunLoop
+    if (g_msCtx.runLoop)
     {
-        CFRunLoopRemoveSource(CFRunLoopGetCurrent(), g_msRunLoopSource, kCFRunLoopCommonModes);
-        CFRelease(g_msRunLoopSource);
-        g_msRunLoopSource = nullptr;
+        CFRunLoopStop(g_msCtx.runLoop);
     }
-    CFRelease(g_msTap);
-    g_msTap = nullptr;
+
+    // 等待线程退出
+    if (g_msCtx.thread)
+    {
+        pthread_join(g_msCtx.thread, nullptr);
+        g_msCtx.thread = 0;
+    }
+
+    NSLog(@"[InputCapture] mouse monitor thread stopped");
 }
 
 #endif // Q_OS_MACOS
