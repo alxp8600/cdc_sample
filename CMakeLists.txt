@@ -146,10 +146,24 @@ set(SAMPLE_SOURCES
     main.cpp
     mainwindow.cpp
     mainwindow.h
+    cam_preview_widget.h
+    cam_preview_dialog.cpp
+    cam_preview_dialog.h
 )
 
 if(CDC_SAMPLE_PLATFORM STREQUAL "mac")
-    list(APPEND SAMPLE_SOURCES input_capture_mac.mm)
+    list(APPEND SAMPLE_SOURCES
+        input_capture_mac.mm
+        cam_preview_widget_apple.mm
+    )
+elseif(CDC_SAMPLE_PLATFORM STREQUAL "ios")
+    list(APPEND SAMPLE_SOURCES
+        cam_preview_widget_apple.mm
+    )
+else()
+    list(APPEND SAMPLE_SOURCES
+        cam_preview_widget.cpp
+    )
 endif()
 
 if(CDC_SAMPLE_PLATFORM STREQUAL "windows")
@@ -172,6 +186,14 @@ if(CDC_SAMPLE_PLATFORM STREQUAL "mac")
         "-framework Cocoa"
         "-framework ApplicationServices"
         "-framework GameController"
+        "-framework Metal"
+        "-framework QuartzCore"
+    )
+elseif(CDC_SAMPLE_PLATFORM STREQUAL "ios")
+    target_link_libraries(${PROJECT_NAME} PRIVATE
+        "-framework Metal"
+        "-framework QuartzCore"
+        "-framework UIKit"
     )
 endif()
 

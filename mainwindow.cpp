@@ -1,4 +1,5 @@
 #include "mainwindow.h"
+#include "cam_preview_dialog.h"
 #include "input_capture.h"
 
 #include "cdc.h"
@@ -16,6 +17,17 @@
 #include <QStandardPaths>
 #include <QTextEdit>
 #include <QVBoxLayout>
+
+CDCMonParam s_getDummyParam()
+{
+    CDCMonParam p;
+    p.bitrate = 4*1000*1000;
+    p.width = 1920;
+    p.height = 1080;
+    p.codec = 2; //hevc
+    p.fps.den = 1;
+    p.fps.num = 30;
+}
 
 MainWindow * MainWindow::instance_ = nullptr;
 
@@ -139,6 +151,9 @@ void MainWindow::setupUi()
     cam_enum_btn_ = new QPushButton("Enum", this);
     cam_enum_btn_->setToolTip("Enumerate camera devices via CDC");
     camLayout->addWidget(cam_enum_btn_);
+    cam_preview_btn_ = new QPushButton("Preview", this);
+    cam_preview_btn_->setToolTip("Open camera preview dialog");
+    camLayout->addWidget(cam_preview_btn_);
     camLayout->addStretch();
     mainLayout->addWidget(camGroup);
 
@@ -158,8 +173,13 @@ void MainWindow::setupUi()
     connect(ms_btn_, &QPushButton::toggled, this, &MainWindow::onMsToggle);
     connect(gp_btn_, &QPushButton::toggled, this, &MainWindow::onGpToggle);
     connect(cam_enum_btn_, &QPushButton::clicked, this, &MainWindow::onCamEnum);
+    connect(cam_preview_btn_, &QPushButton::clicked, this, &MainWindow::onCamPreview);
     connect(cam_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &MainWindow::onCamComboChanged);
+
+    // 程序初始化即创建摄像头预览对话框, 点击按钮仅显示/隐藏
+    cam_preview_dlg_ = new CamPreviewDialog(this);
+    cam_preview_dlg_->setAttribute(Qt::WA_DeleteOnClose, false);
 }
 
 void MainWindow::appendLog(const QString & text)
@@ -215,7 +235,8 @@ void MainWindow::onCamToggle(bool checked)
 
 void MainWindow::onMonToggle(bool checked)
 {
-    CDCMonState(cdc_, checked);
+    CDCMonParam param = s_getDummyParam();
+    CDCMonState(cdc_, checked, &param);
     appendLog(QString("[INFO] Mon %1").arg(checked ? "on" : "off"));
 }
 
@@ -312,6 +333,20 @@ void MainWindow::onCamComboChanged(int index)
     }
 }
 
+void MainWindow::onCamPreview()
+{
+    if (!cam_preview_dlg_) return;
+
+    if (cam_preview_dlg_->isVisible())
+    {
+        cam_preview_dlg_->hide();
+    }
+    else
+    {
+        cam_preview_dlg_->show();
+    }
+}
+
 void MainWindow::openSession()
 {
     const QString url = addr_edit_->text().trimmed();
@@ -323,10 +358,19 @@ void MainWindow::openSession()
 
     url_utf8_ = url.toStdString();   // persistent storage for cfg.url
 
+    // 确保预览对话框已完成布局，CAMetalLayer drawableSize 有效，
+    // 否则 CDCOpen 内 cam 模块 setupPreviewWindow 时 layer 尺寸为 0
+    if (cam_preview_dlg_)
+    {
+        cam_preview_dlg_->show();
+        cam_preview_dlg_->hide();
+    }
+
     CDCConfig cfg{};
     cfg.url                = url_utf8_.c_str();
     cfg.flow_id            = nullptr;
     cfg.wnd.wnd            = nullptr;  // demo: no video render widget
+    cfg.cam_wnd.wnd        = cam_preview_dlg_ ? cam_preview_dlg_->previewLayer() : nullptr;
     cfg.cam_name           = selected_cam_id_.empty() ? nullptr : selected_cam_id_.c_str();
     cfg.cam_resolution     = nullptr;  // default resolution
     cfg.cam_fps            = 30;
@@ -341,7 +385,8 @@ void MainWindow::openSession()
     CDCMicState(cdc_, mic_btn_->isChecked());
     CDCSpkState(cdc_, spk_btn_->isChecked());
     CDCCamState(cdc_, cam_btn_->isChecked());
-    CDCMonState(cdc_, mon_btn_->isChecked());
+    CDCMonParam param = s_getDummyParam();
+    CDCMonState(cdc_, mon_btn_->isChecked(), &param);
 
     opened_ = true;
     appendLog(QString("[INFO] CDCOpen called"));

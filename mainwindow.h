@@ -8,6 +8,7 @@
 #include "cdc.h"
 
 class InputCapture;
+class CamPreviewDialog;
 class QComboBox;
 class QLineEdit;
 class QPushButton;
@@ -36,6 +37,7 @@ private slots:
     void onCamEnum();
     void onCamListUpdate(QVector<QPair<QString, QString>> devices);
     void onCamComboChanged(int index);
+    void onCamPreview();
 
 private:
     Q_INVOKABLE void appendLog(const QString & text);
@@ -64,8 +66,11 @@ private:
     QPushButton * ms_btn_ = nullptr;
     QPushButton * gp_btn_ = nullptr;
     QPushButton * cam_enum_btn_ = nullptr;
+    QPushButton * cam_preview_btn_ = nullptr;
     QComboBox   * cam_combo_ = nullptr;
     QTextEdit   * log_view_ = nullptr;
+
+    CamPreviewDialog * cam_preview_dlg_ = nullptr;
 
     std::string selected_cam_id_;
     std::string log_path_;           // 日志文件路径, 需存活至 CDCOpen 返回
