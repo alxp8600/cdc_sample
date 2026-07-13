@@ -370,7 +370,8 @@ void MainWindow::openSession()
     cfg.url                = url_utf8_.c_str();
     cfg.flow_id            = nullptr;
     cfg.wnd.wnd            = nullptr;  // demo: no video render widget
-    cfg.cam_wnd.wnd        = cam_preview_dlg_ ? cam_preview_dlg_->previewLayer() : nullptr;
+    //cfg.cam_wnd.wnd        = cam_preview_dlg_ ? cam_preview_dlg_->previewLayer() : nullptr;
+    cfg.wnd.wnd        = cam_preview_dlg_ ? cam_preview_dlg_->previewLayer() : nullptr;
     cfg.cam_name           = selected_cam_id_.empty() ? nullptr : selected_cam_id_.c_str();
     cfg.cam_resolution     = nullptr;  // default resolution
     cfg.cam_fps            = 30;
@@ -378,15 +379,19 @@ void MainWindow::openSession()
     cfg.retry_count        = 3;
     cfg.client_keepalive   = 1;
     cfg.keepalive_interval_ms = 3000;
+    cfg.cam_mon_test = 1;
+    cfg.mic_spk_test = 1;
 
-    CDCOpen(cdc_, &cfg);
-
-    // 设置各模块开关状态 (mic/spk/cam/mon 通过独立 API 控制)
     CDCMicState(cdc_, mic_btn_->isChecked());
     CDCSpkState(cdc_, spk_btn_->isChecked());
     CDCCamState(cdc_, cam_btn_->isChecked());
     CDCMonParam param = s_getDummyParam();
     CDCMonState(cdc_, mon_btn_->isChecked(), &param);
+
+    CDCOpen(cdc_, &cfg);
+
+    // 设置各模块开关状态 (mic/spk/cam/mon 通过独立 API 控制)
+
 
     opened_ = true;
     appendLog(QString("[INFO] CDCOpen called"));
